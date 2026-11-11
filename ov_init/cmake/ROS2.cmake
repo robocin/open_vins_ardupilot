@@ -79,6 +79,12 @@ ament_target_dependencies(test_dynamic_init ${ament_libraries})
 target_link_libraries(test_dynamic_init ov_init_lib ${thirdparty_libraries})
 install(TARGETS test_dynamic_init DESTINATION lib/${PROJECT_NAME})
 
+add_executable(test_heading_alignment src/test_heading_alignment.cpp)
+ament_target_dependencies(test_heading_alignment ${ament_libraries})
+target_link_libraries(test_heading_alignment ov_init_lib ${thirdparty_libraries})
+target_compile_options(test_heading_alignment PRIVATE -O0 -g0)
+install(TARGETS test_heading_alignment DESTINATION lib/${PROJECT_NAME})
+
 # Install launch and config directories
 install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch/)
 

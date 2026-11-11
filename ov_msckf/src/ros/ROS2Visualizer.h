@@ -191,6 +191,11 @@ protected:
   // Last camera message timestamps we have received (mapped by cam id)
   std::map<int, double> camera_last_timestamp;
 
+  // HIGHRES_IMU may be stamped in autopilot boot time while cameras use Unix time.
+  bool auto_rebase_imu = true;
+  bool imu_clock_checked = false;
+  double imu_timestamp_offset = 0.0;
+
   // Last timestamp we visualized at
   double last_visualization_timestamp = 0;
   double last_visualization_timestamp_image = 0;

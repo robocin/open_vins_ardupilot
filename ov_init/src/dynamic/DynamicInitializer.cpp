@@ -551,7 +551,14 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
   // Convert our states to be a gravity aligned global frame of reference
   // Here we say that the I0 frame is at 0,0,0 and shared the global origin
   Eigen::Matrix3d R_GtoI0;
-  InitializerHelper::gram_schmidt(gravity_inI0, R_GtoI0);
+  Eigen::Vector3d forward_inI0 = Eigen::Vector3d::UnitX();
+  if (params.init_align_yaw_to_imu_x) {
+    // Dynamic initialization spans motion. Anchor zero yaw to the newest IMU
+    // pose, which is the pose first handed to the estimator, rather than I0.
+    const Eigen::Matrix3d R_I0toIinit = quat_2_Rot(ori_I0toIi.at(newest_cam_time));
+    forward_inI0 = R_I0toIinit.transpose() * Eigen::Vector3d::UnitX();
+  }
+  InitializerHelper::gram_schmidt(gravity_inI0, R_GtoI0, params.init_align_yaw_to_imu_x, forward_inI0);
   Eigen::Vector4d q_GtoI0 = rot_2_quat(R_GtoI0);
   Eigen::Vector3d gravity;
   gravity << 0.0, 0.0, params.gravity_mag;

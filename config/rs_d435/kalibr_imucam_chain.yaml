@@ -1,0 +1,43 @@
+%YAML:1.0
+
+cam0:
+  # Nominal forward mount: IMU frame FLU (X forward, Y left, Z up),
+  # camera optical frame (X right, Y down, Z forward).
+  # Translation is unmeasured; replace this transform with calibration.
+  T_cam_imu:
+    - [0.0, -1.0, 0.0, 0.0]
+    - [0.0, 0.0, -1.0, 0.0]
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]
+
+  cam_overlaps: [1]
+  camera_model: pinhole
+  distortion_model: radtan
+  distortion_coeffs: [0.0, 0.0, 0.0, 0.0]
+  intrinsics: [427.1994934, 427.1994934, 422.8375854, 245.3684235]
+  resolution: [848, 480]
+  rostopic: /camera/camera/infra1/image_rect_raw
+  timeshift_cam_imu: 0.0
+
+cam1:
+  # Same nominal orientation; -0.05 m assumes cam1 is 5 cm right of cam0.
+  T_cam_imu:
+    - [0.0, -1.0, 0.0, -0.05]
+    - [0.0, 0.0, -1.0, 0.0]
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]
+
+  T_cn_cnm1:
+    - [1.0, 0.0, 0.0, -0.05]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]
+
+  cam_overlaps: [0]
+  camera_model: pinhole
+  distortion_model: radtan
+  distortion_coeffs: [0.0, 0.0, 0.0, 0.0]
+  intrinsics: [427.1994934, 427.1994934, 422.8375854, 245.3684235]
+  resolution: [848, 480]
+  rostopic: /camera/camera/infra2/image_rect_raw
+  timeshift_cam_imu: 0.0

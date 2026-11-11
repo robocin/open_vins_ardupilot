@@ -165,6 +165,9 @@ void ROS2Visualizer::setup_subscribers(std::shared_ptr<ov_core::YamlParser> pars
   // We need a valid parser
   assert(parser != nullptr);
 
+  _node->declare_parameter<bool>("auto_rebase_imu", true);
+  _node->get_parameter("auto_rebase_imu", auto_rebase_imu);
+
   // Create imu subscriber (handle legacy ros param info)
   std::string topic_imu;
   _node->declare_parameter<std::string>("topic_imu", "/imu0");
@@ -186,8 +189,11 @@ void ROS2Visualizer::setup_subscribers(std::shared_ptr<ov_core::YamlParser> pars
     parser->parse_external("relative_config_imucam", "cam" + std::to_string(0), "rostopic", cam_topic0);
     parser->parse_external("relative_config_imucam", "cam" + std::to_string(1), "rostopic", cam_topic1);
     // Create sync filter (they have unique pointers internally, so we have to use move logic here...)
-    auto image_sub0 = std::make_shared<message_filters::Subscriber<sensor_msgs::msg::Image>>(_node, cam_topic0);
-    auto image_sub1 = std::make_shared<message_filters::Subscriber<sensor_msgs::msg::Image>>(_node, cam_topic1);
+    // RealSense image publishers use best-effort sensor data QoS.
+    auto image_sub0 = std::make_shared<message_filters::Subscriber<sensor_msgs::msg::Image>>(_node, cam_topic0,
+                                                                                              rmw_qos_profile_sensor_data);
+    auto image_sub1 = std::make_shared<message_filters::Subscriber<sensor_msgs::msg::Image>>(_node, cam_topic1,
+                                                                                              rmw_qos_profile_sensor_data);
     auto sync = std::make_shared<message_filters::Synchronizer<sync_pol>>(sync_pol(10), *image_sub0, *image_sub1);
     sync->registerCallback(std::bind(&ROS2Visualizer::callback_stereo, this, std::placeholders::_1, std::placeholders::_2, 0, 1));
     // sync->registerCallback([](const sensor_msgs::msg::Image::SharedPtr msg0, const sensor_msgs::msg::Image::SharedPtr msg1)
@@ -207,11 +213,10 @@ void ROS2Visualizer::setup_subscribers(std::shared_ptr<ov_core::YamlParser> pars
       _node->declare_parameter<std::string>("topic_camera" + std::to_string(i), "/cam" + std::to_string(i) + "/image_raw");
       _node->get_parameter("topic_camera" + std::to_string(i), cam_topic);
       parser->parse_external("relative_config_imucam", "cam" + std::to_string(i), "rostopic", cam_topic);
-      // create subscriber
-      // auto sub = _node->create_subscription<sensor_msgs::msg::Image>(
-      //    cam_topic, rclcpp::SensorDataQoS(), std::bind(&ROS2Visualizer::callback_monocular, this, std::placeholders::_1, i));
+      // Use sensor data QoS so best-effort camera publishers can connect.
       auto sub = _node->create_subscription<sensor_msgs::msg::Image>(
-          cam_topic, 10, [this, i](const sensor_msgs::msg::Image::SharedPtr msg0) { callback_monocular(msg0, i); });
+          cam_topic, rclcpp::SensorDataQoS(),
+          [this, i](const sensor_msgs::msg::Image::SharedPtr msg0) { callback_monocular(msg0, i); });
       subs_cam.push_back(sub);
       PRINT_INFO("subscribing to cam (mono): %s\n", cam_topic.c_str());
     }
@@ -439,7 +444,21 @@ void ROS2Visualizer::callback_inertial(const sensor_msgs::msg::Imu::SharedPtr ms
 
   // convert into correct format
   ov_core::ImuData message;
-  message.timestamp = msg->header.stamp.sec + msg->header.stamp.nanosec * 1e-9;
+  double imu_timestamp = msg->header.stamp.sec + msg->header.stamp.nanosec * 1e-9;
+  if (auto_rebase_imu && !imu_clock_checked) {
+    // MAVLink HIGHRES_IMU permits either boot time or Unix time. RealSense images
+    // use Unix time, so align boot-time IMU stamps to the ROS clock once while
+    // retaining the IMU sample spacing. Do not alter bag/simulated timestamps.
+    double ros_timestamp = _node->now().seconds();
+    if (ros_timestamp > 946684800.0) {
+      if (imu_timestamp >= 0.0 && imu_timestamp < 946684800.0) {
+        imu_timestamp_offset = ros_timestamp - imu_timestamp;
+        RCLCPP_WARN(_node->get_logger(), "Rebasing boot-time IMU stamps to ROS time (offset %.3f s)", imu_timestamp_offset);
+      }
+      imu_clock_checked = true;
+    }
+  }
+  message.timestamp = imu_timestamp + imu_timestamp_offset;
   message.wm << msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z;
   message.am << msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z;
 
@@ -532,6 +551,12 @@ void ROS2Visualizer::callback_monocular(const sensor_msgs::msg::Image::SharedPtr
   std::lock_guard<std::mutex> lck(camera_queue_mtx);
   camera_queue.push_back(message);
   std::sort(camera_queue.begin(), camera_queue.end());
+  // Keep memory bounded if IMU data is missing or its clock cannot advance past camera time.
+  if (camera_queue.size() > 30) {
+    camera_queue.pop_front();
+    RCLCPP_WARN_THROTTLE(_node->get_logger(), *_node->get_clock(), 5000,
+                         "Camera queue is full; dropping old frames. Check IMU reception and timestamp clock.");
+  }
 }
 
 void ROS2Visualizer::callback_stereo(const sensor_msgs::msg::Image::ConstSharedPtr msg0, const sensor_msgs::msg::Image::ConstSharedPtr msg1,
@@ -586,6 +611,11 @@ void ROS2Visualizer::callback_stereo(const sensor_msgs::msg::Image::ConstSharedP
   std::lock_guard<std::mutex> lck(camera_queue_mtx);
   camera_queue.push_back(message);
   std::sort(camera_queue.begin(), camera_queue.end());
+  if (camera_queue.size() > 30) {
+    camera_queue.pop_front();
+    RCLCPP_WARN_THROTTLE(_node->get_logger(), *_node->get_clock(), 5000,
+                         "Camera queue is full; dropping old frames. Check IMU reception and timestamp clock.");
+  }
 }
 
 void ROS2Visualizer::publish_state() {

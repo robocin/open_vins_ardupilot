@@ -121,7 +121,7 @@ bool StaticInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarianc
   // Get rotation with z axis aligned with -g (z_in_G=0,0,1)
   Eigen::Vector3d z_axis = a_avg_2to1 / a_avg_2to1.norm();
   Eigen::Matrix3d Ro;
-  InitializerHelper::gram_schmidt(z_axis, Ro);
+  InitializerHelper::gram_schmidt(z_axis, Ro, params.init_align_yaw_to_imu_x);
   Eigen::Vector4d q_GtoI = rot_2_quat(Ro);
 
   // Set our biases equal to our noise (subtract our gravity from accelerometer bias)

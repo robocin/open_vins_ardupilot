@@ -133,9 +133,13 @@ public:
    * https://en.wikipedia.org/wiki/Gram%E2%80%93Schmidt_process
    *
    * @param gravity_inI Gravity in our sensor frame
-   * @param R_GtoI Rotation from the arbitrary inertial reference frame to this gravity vector
+   * @param R_GtoI Rotation from the gravity-aligned inertial frame to the IMU frame
+   * @param align_x_to_imu_forward If true, choose global X along the horizontal projection of forward_inI
+   * @param forward_inI Forward axis in the reference IMU frame (normally its +X axis)
    */
-  static void gram_schmidt(const Eigen::Vector3d &gravity_inI, Eigen::Matrix3d &R_GtoI) {
+  static void gram_schmidt(const Eigen::Vector3d &gravity_inI, Eigen::Matrix3d &R_GtoI,
+                           bool align_x_to_imu_forward = false,
+                           const Eigen::Vector3d &forward_inI = Eigen::Vector3d::UnitX()) {
 
     // This will find an orthogonal vector to gravity which is our local z-axis
     // We need to ensure we normalize after each one such that we obtain unit vectors
@@ -145,7 +149,15 @@ public:
     Eigen::Vector3d e_2(0.0, 1.0, 0.0);
     double inner1 = e_1.dot(z_axis) / z_axis.norm();
     double inner2 = e_2.dot(z_axis) / z_axis.norm();
-    if (fabs(inner1) < fabs(inner2)) {
+    // Yaw is unobservable to VIO. For a body-mounted IMU whose +X points forward,
+    // this choice makes the drone's startup heading global +X (zero yaw).
+    // If the forward axis is nearly vertical, its horizontal heading is undefined; retain the
+    // original stable-axis construction in that case.
+    Eigen::Vector3d forward_horizontal = forward_inI - forward_inI.dot(z_axis) * z_axis;
+    if (align_x_to_imu_forward && forward_horizontal.norm() > 0.1) {
+      x_axis = forward_horizontal.normalized();
+      y_axis = z_axis.cross(x_axis).normalized();
+    } else if (fabs(inner1) < fabs(inner2)) {
       x_axis = z_axis.cross(e_1);
       x_axis = x_axis / x_axis.norm();
       y_axis = z_axis.cross(x_axis);
