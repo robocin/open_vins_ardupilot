@@ -31,6 +31,9 @@
 #include "utils/print.h"
 #include "utils/sensor_data.h"
 
+#include <algorithm>
+#include <chrono>
+
 using namespace ov_core;
 using namespace ov_type;
 using namespace ov_msckf;
@@ -147,6 +150,23 @@ ROS2Visualizer::ROS2Visualizer(std::shared_ptr<rclcpp::Node> node, std::shared_p
     }
   }
 
+  // Estimator reset (real sensor runs only; the simulator drives its own loop)
+  if (_sim == nullptr) {
+    pub_reset_count = node->create_publisher<std_msgs::msg::UInt32>("reset_count", rclcpp::QoS(1).transient_local());
+    std_msgs::msg::UInt32 count_msg;
+    count_msg.data = reset_count;
+    pub_reset_count->publish(count_msg);
+    PRINT_DEBUG("Publishing: %s\n", pub_reset_count->get_topic_name());
+    srv_reset = node->create_service<std_srvs::srv::Trigger>(
+        "reset", std::bind(&ROS2Visualizer::callback_reset, this, std::placeholders::_1, std::placeholders::_2));
+    PRINT_DEBUG("Serving: %s\n", srv_reset->get_service_name());
+    timer_retired_apps = node->create_wall_timer(std::chrono::seconds(1), [this]() {
+      retired_apps.erase(std::remove_if(retired_apps.begin(), retired_apps.end(),
+                                        [](const std::shared_ptr<VioManager> &app) { return !app->is_initializing(); }),
+                         retired_apps.end());
+    });
+  }
+
   // Start thread for the image publishing
   if (_app->get_params().use_multi_threading_pubs) {
     std::thread thread([&] {
@@ -158,6 +178,46 @@ ROS2Visualizer::ROS2Visualizer(std::shared_ptr<rclcpp::Node> node, std::shared_p
     });
     thread.detach();
   }
+}
+
+void ROS2Visualizer::callback_reset(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
+                                    std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+
+  // The update thread feeds cameras and publishes the state while holding this lock,
+  // so taking it guarantees no update is in flight while the estimator is swapped.
+  std::lock_guard<std::mutex> lck(camera_queue_mtx);
+
+  std::shared_ptr<VioManager> fresh_app;
+  try {
+    VioManagerOptions params = _app->get_params();
+    fresh_app = std::make_shared<VioManager>(params);
+  } catch (const std::exception &e) {
+    response->success = false;
+    response->message = std::string("failed to create a new estimator: ") + e.what();
+    RCLCPP_ERROR(_node->get_logger(), "%s", response->message.c_str());
+    return;
+  }
+
+  // Keep the old estimator alive while its detached init thread may still run.
+  retired_apps.push_back(_app);
+  std::atomic_store(&_app, fresh_app);
+
+  // Drop per-run state; the IMU clock rebase stays valid across resets.
+  camera_queue.clear();
+  camera_last_timestamp.clear();
+  poses_imu.clear();
+  start_time_set = false;
+  last_visualization_timestamp = 0;
+  last_visualization_timestamp_image = 0;
+
+  reset_count++;
+  std_msgs::msg::UInt32 count_msg;
+  count_msg.data = reset_count;
+  pub_reset_count->publish(count_msg);
+
+  response->success = true;
+  response->message = "estimator reset (count " + std::to_string(reset_count) + "); waiting for initialization";
+  RCLCPP_WARN(_node->get_logger(), "%s", response->message.c_str());
 }
 
 void ROS2Visualizer::setup_subscribers(std::shared_ptr<ov_core::YamlParser> parser) {
@@ -675,19 +735,23 @@ void ROS2Visualizer::publish_state() {
 
 void ROS2Visualizer::publish_images() {
 
+  // Runs on its own thread when multi-threaded publishing is on, so take one
+  // consistent reference in case the estimator is swapped by a reset.
+  std::shared_ptr<VioManager> app = std::atomic_load(&_app);
+
   // Return if we have already visualized
-  if (_app->get_state() == nullptr)
+  if (app->get_state() == nullptr)
     return;
-  if (last_visualization_timestamp_image == _app->get_state()->_timestamp && _app->initialized())
+  if (last_visualization_timestamp_image == app->get_state()->_timestamp && app->initialized())
     return;
-  last_visualization_timestamp_image = _app->get_state()->_timestamp;
+  last_visualization_timestamp_image = app->get_state()->_timestamp;
 
   // Check if we have subscribers
   if (it_pub_tracks.getNumSubscribers() == 0)
     return;
 
   // Get our image of history tracks
-  cv::Mat img_history = _app->get_historical_viz_image();
+  cv::Mat img_history = app->get_historical_viz_image();
   if (img_history.empty())
     return;
 

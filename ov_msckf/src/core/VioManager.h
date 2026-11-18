@@ -98,6 +98,9 @@ public:
   /// If we are initialized or not
   bool initialized() { return is_initialized_vio && timelastupdate != -1; }
 
+  /// If the detached initialization thread is still running (it references this object)
+  bool is_initializing() { return thread_init_running; }
+
   /// Timestamp that the system was initialized at
   double initialized_time() { return startup_time; }
 

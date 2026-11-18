@@ -40,6 +40,8 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/u_int32.hpp>
+#include <std_srvs/srv/trigger.hpp>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/transform_datatypes.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
@@ -119,6 +121,16 @@ public:
   void callback_stereo(const sensor_msgs::msg::Image::ConstSharedPtr msg0, const sensor_msgs::msg::Image::ConstSharedPtr msg1, int cam_id0,
                        int cam_id1);
 
+  /**
+   * @brief Replace the estimator with a fresh one built from the same options.
+   *
+   * Subscriptions, publishers and the IMU clock rebase are kept, so the filter
+   * re-initializes from the next measurements without restarting the process.
+   * Each reset increments the latched reset_count topic.
+   */
+  void callback_reset(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+                      std::shared_ptr<std_srvs::srv::Trigger::Response> response);
+
 protected:
   /// Publish the current state
   void publish_state();
@@ -195,6 +207,17 @@ protected:
   bool auto_rebase_imu = true;
   bool imu_clock_checked = false;
   double imu_timestamp_offset = 0.0;
+
+  // Estimator reset service. It runs in the node's default (mutually exclusive)
+  // callback group, so it never overlaps the IMU/camera callbacks.
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_reset;
+  rclcpp::Publisher<std_msgs::msg::UInt32>::SharedPtr pub_reset_count;
+  uint32_t reset_count = 0;
+
+  // Replaced estimators whose detached init thread may still reference them.
+  // They are released once that thread finishes.
+  std::vector<std::shared_ptr<VioManager>> retired_apps;
+  rclcpp::TimerBase::SharedPtr timer_retired_apps;
 
   // Last timestamp we visualized at
   double last_visualization_timestamp = 0;
